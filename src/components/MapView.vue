@@ -85,10 +85,15 @@ onMounted(() => {
     }
 
     // Add OpenStreetMap tile layer with minimal black and white style
-    L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>, &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors',
-      maxZoom: 20
-    }).addTo(map)
+    const apiKey = import.meta.env.VITE_STADIA_KEY
+
+    L.tileLayer(
+      `https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=${apiKey}`,
+      {
+        attribution: '&copy; Stadia Maps &copy; OpenStreetMap contributors',
+        maxZoom: 20
+      }
+    ).addTo(map)
 
     // Add click handler for adding new points
     map.on('click', handleMapClick)
