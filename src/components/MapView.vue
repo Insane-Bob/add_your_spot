@@ -25,13 +25,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch, nextTick, defineProps } from 'vue'
+import { ref, onMounted, nextTick, defineProps } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import Modal from './Modal.vue'
 import InfoCard from './InfoCard.vue'
 import { categories } from '../config/categories.js'
-import { SEED_POINTS } from '../config/seedPoints.js'
 import { roadColorForHighway, roadWeightForHighway, roadPriority } from '../config/roads.js'
 
 defineProps({
@@ -41,50 +40,56 @@ defineProps({
   }
 })
 
-const points       = ref([...SEED_POINTS])
+const points        = ref([])
 const selectedPoint = ref(null)
-const showModal    = ref(false)
-const newPoint     = ref(null)
+const showModal     = ref(false)
+const newPoint      = ref(null)
 
 let map = null
-const markers = {}
 let roadsLayer = null
 let roadRefreshTimer = null
 
-// Charger les points sauvegardés du localStorage s'ils existent
-const saved = localStorage.getItem('mapPoints')
-if (saved) {
+/* ---------------------------
+   LOAD POINTS FROM DATABASE
+---------------------------- */
+async function loadPoints() {
   try {
-    const parsed = JSON.parse(saved)
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      points.value = parsed
-    }
-  } catch (e) {
-    console.warn('Erreur lors du chargement des points sauvegardés:', e)
-    // Garder les SEED_POINTS par défaut
+    const res = await fetch('/api/point')
+    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
+    const data = await res.json()
+
+    points.value = data
+
+    data.forEach(point => {
+      if (point.lat && point.lng && point.category && categories[point.category]) {
+        addMarkerToMap(point)
+      }
+    })
+
+  } catch (err) {
+    console.error('Erreur chargement points:', err)
+    // Fallback: utiliser les seed points si l'API échoue
+    points.value = []
   }
 }
 
-watch(points, val => {
-  localStorage.setItem('mapPoints', JSON.stringify(val))
-}, { deep: true })
-
+/* ---------------------------
+   MAP INIT
+---------------------------- */
 onMounted(() => {
-  nextTick(() => {
-    // Initialize map centered on Salzburg
+  nextTick(async () => {
+
     map = L.map('map', {
-      center: [47.8095, 13.0550], // Salzburg coordinates
+      center: [47.8095, 13.0550],
       zoom: 13,
       zoomControl: true
     })
 
-    // Dedicated pane keeps custom roads consistently visible above tiles.
     if (!map.getPane('roadsPane')) {
       map.createPane('roadsPane')
       map.getPane('roadsPane').style.zIndex = '420'
     }
 
-    // Add OpenStreetMap tile layer with minimal black and white style
     const apiKey = import.meta.env.VITE_STADIA_KEY
 
     L.tileLayer(
@@ -95,41 +100,31 @@ onMounted(() => {
       }
     ).addTo(map)
 
-    // Add click handler for adding new points
     map.on('click', handleMapClick)
-
-    // Keep roads synced with current viewport.
     map.on('moveend', scheduleRoadRefresh)
 
-    // Load existing points
-    points.value.forEach(point => {
-      if (point.lat && point.lng && point.category && categories[point.category]) {
-        addMarkerToMap(point)
-      }
-    })
-
+    await loadPoints()
     loadRoadOverlay()
   })
 })
 
+/* ---------------------------
+   ROAD OVERLAY
+---------------------------- */
 function scheduleRoadRefresh() {
   clearTimeout(roadRefreshTimer)
-  roadRefreshTimer = setTimeout(() => {
-    loadRoadOverlay()
-  }, 220)
+  roadRefreshTimer = setTimeout(loadRoadOverlay, 250)
 }
-
 
 async function loadRoadOverlay() {
   if (!map) return
 
   const bounds = map.getBounds()
-  const south = bounds.getSouth()
-  const west = bounds.getWest()
-  const north = bounds.getNorth()
-  const east = bounds.getEast()
-
-  const query = `[out:json][timeout:20];way["highway"](${south},${west},${north},${east});out geom;`
+  const query = `
+    [out:json][timeout:20];
+    way["highway"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+    out geom;
+  `
 
   try {
     const response = await fetch('https://overpass-api.de/api/interpreter', {
@@ -137,30 +132,23 @@ async function loadRoadOverlay() {
       body: query
     })
 
-    if (!response.ok) {
-      console.warn('Road overlay request failed:', response.status)
-      return
-    }
+    if (!response.ok) return
+
     const data = await response.json()
 
-    if (roadsLayer) {
-      map.removeLayer(roadsLayer)
-    }
-
+    if (roadsLayer) map.removeLayer(roadsLayer)
     roadsLayer = L.layerGroup().addTo(map)
 
     const ways = (data.elements || [])
-      .filter(element => element.type === 'way' && element.tags?.highway && element.geom?.length)
-      // Draw low-priority roads first so main roads stay visible on top.
+      .filter(el => el.type === 'way' && el.tags?.highway && el.geom?.length)
       .sort((a, b) => roadPriority(a.tags.highway) - roadPriority(b.tags.highway))
 
-    for (const element of ways) {
-      const latLngs = element.geom.map(node => [node.lat, node.lon])
-      const highway = element.tags.highway
+    for (const el of ways) {
+      const latLngs = el.geom.map(n => [n.lat, n.lon])
 
       L.polyline(latLngs, {
-        color: roadColorForHighway(highway),
-        weight: roadWeightForHighway(highway),
+        color: roadColorForHighway(el.tags.highway),
+        weight: roadWeightForHighway(el.tags.highway),
         opacity: 0.95,
         interactive: false,
         lineCap: 'round',
@@ -168,12 +156,15 @@ async function loadRoadOverlay() {
         pane: 'roadsPane'
       }).addTo(roadsLayer)
     }
-  } catch (error) {
-    console.warn('Road overlay unavailable:', error)
+
+  } catch (err) {
+    console.warn('Overlay unavailable:', err)
   }
 }
 
-
+/* ---------------------------
+   CLICK → CREATE POINT
+---------------------------- */
 function handleMapClick(e) {
   newPoint.value = {
     lat: e.latlng.lat,
@@ -182,69 +173,73 @@ function handleMapClick(e) {
   showModal.value = true
 }
 
+/* ---------------------------
+   ADD MARKER
+---------------------------- */
 function addMarkerToMap(point) {
   if (!point.category || !categories[point.category]) return
 
-  const color = categories[point.category].color
   const category = categories[point.category]
+  const color = category.color
 
-  // Créer un cercle au lieu d'un marqueur
   const circle = L.circleMarker([point.lat, point.lng], {
     radius: 12,
     fillColor: color,
     color: color,
     weight: 3,
     opacity: 1,
-    fillOpacity: 0.9,
-    className: 'map-circle-marker'
+    fillOpacity: 0.9
   }).addTo(map)
 
   circle.bindTooltip(
-    `<div class="tooltip-content">
-      <span class="tooltip-icon-wrap">
-        <img src="${category.icon}" alt="${category.label}" class="tooltip-icon" />
-      </span>
-      <div class="tooltip-text">
-        <strong>${point.title}</strong>
-        <small>${category.label}</small>
-      </div>
-    </div>`,
-    {
-      permanent: false,
-      direction: 'top',
-      offset: [0, -14],
-      className: 'custom-tooltip'
-    }
+    `<strong>${point.title}</strong><br/><small>${category.label}</small>`,
+    { direction: 'top', offset: [0, -12] }
   )
-
-  circle.bindPopup(`<strong>${point.title}</strong>${point.author ? '<br/>by ' + point.author : ''}`)
 
   circle.on('click', () => {
     selectedPoint.value = point
   })
 
-  circle.on('mouseover', function() {
+  circle.on('mouseover', function () {
     this.setRadius(16)
-    this.setStyle({ weight: 4, opacity: 1, fillOpacity: 1 })
   })
 
-  circle.on('mouseout', function() {
+  circle.on('mouseout', function () {
     this.setRadius(12)
-    this.setStyle({ weight: 3, opacity: 1, fillOpacity: 0.9 })
   })
-
-  markers[point.id] = circle
 }
 
-function savePoint(data) {
-  const point = { id: Date.now(), ...data }
-  points.value.push(point)
-  addMarkerToMap(point)
-  showModal.value = false
+/* ---------------------------
+   SAVE POINT TO DATABASE
+---------------------------- */
+async function savePoint(data) {
+  try {
+    const res = await fetch('/api/point', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...data,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      })
+    })
 
-  // Confirmation de sauvegarde
-  console.log('✅ Punkt gespeichert:', point)
-  console.log('📊 Alle Punkte (zum Kopieren in SEED_POINTS):', JSON.stringify(points.value, null, 2))
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`)
+    }
+
+    const savedPoint = await res.json()
+
+    points.value.push(savedPoint)
+    addMarkerToMap(savedPoint)
+    showModal.value = false
+
+    console.log('✅ Point sauvegardé:', savedPoint)
+
+  } catch (err) {
+    console.error('Erreur sauvegarde:', err)
+    alert('Erreur lors de la sauvegarde: ' + err.message)
+  }
 }
 </script>
 
