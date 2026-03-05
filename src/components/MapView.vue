@@ -9,18 +9,18 @@
 
   <!-- Modal / InfoCard -->
   <Modal
-    v-if="showModal"
+    v-if="showModal && !selectedPoint"
     :newPoint="newPoint"
     :language="language"
     @save="savePoint"
-    @close="showModal = false"
+    @close="closeModal"
   />
 
   <InfoCard
-    v-if="selectedPoint"
+    v-if="selectedPoint && !showModal"
     :point="selectedPoint"
     :language="language"
-    @close="selectedPoint = null"
+    @close="closeInfoCard"
   />
 </template>
 
@@ -236,7 +236,7 @@ async function savePoint(data) {
 
     points.value.push(savedPoint)
     addMarkerToMap(savedPoint)
-    showModal.value = false
+    closeModal()
 
     console.log('✅ Point sauvegardé:', savedPoint)
 
@@ -245,9 +245,43 @@ async function savePoint(data) {
     alert('Erreur lors de la sauvegarde: ' + err.message)
   }
 }
+
+/* ---------------------------
+   CLOSE HANDLERS
+---------------------------- */
+function closeModal() {
+  showModal.value = false
+  newPoint.value = null
+}
+
+function closeInfoCard() {
+  selectedPoint.value = null
+}
 </script>
 
 <style>
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  position: fixed;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+#app {
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  position: fixed;
+}
+
 .map-container {
   width: 100vw;
   height: 100vh;
@@ -257,6 +291,7 @@ async function savePoint(data) {
   left: 0;
   right: 0;
   bottom: 0;
+  touch-action: pan-x pan-y;
 }
 
 /* Override Leaflet default styles */
@@ -264,6 +299,7 @@ async function savePoint(data) {
   background: #f5f5f5;
   width: 100%;
   height: 100%;
+  touch-action: pan-x pan-y;
 }
 
 .leaflet-popup-content-wrapper {
@@ -317,15 +353,19 @@ async function savePoint(data) {
 
 /* Cursor styles on map for better UX */
 .leaflet-container {
-  cursor: crosshair;
+  cursor: crosshair !important;
 }
 
-.leaflet-grab {
-  cursor: grab;
+.leaflet-container.leaflet-grab {
+  cursor: grab !important;
 }
 
-.leaflet-dragging .leaflet-grab {
-  cursor: grabbing;
+.leaflet-container.leaflet-dragging {
+  cursor: grabbing !important;
+}
+
+.leaflet-container.leaflet-dragging .leaflet-grab {
+  cursor: grabbing !important;
 }
 
 /* Make all markers obviously hoverable with scale effect */
@@ -436,5 +476,22 @@ async function savePoint(data) {
   z-index: 900;
   pointer-events: none;
   opacity: 0.92;
+}
+
+/* ─── RESPONSIVE ─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .project-logo {
+    width: 180px;
+    left: -20px;
+    bottom: -20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .project-logo {
+    width: 140px;
+    left: -15px;
+    bottom: -15px;
+  }
 }
 </style>
